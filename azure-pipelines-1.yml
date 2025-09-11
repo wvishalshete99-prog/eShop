@@ -1,5 +1,6 @@
 trigger: none
 pr: none
+
 parameters:
   - name: Location
     displayName: Select the location for Enabler Components Deployment
@@ -14,101 +15,12 @@ parameters:
     displayName: Select Dashboard Type
     type: string
     default: "Standard Dashboard"
-    values:
-      - Standard Dashboard
-      - Monitoring Dashboard
-      - Capacity Dashboard
+
   - name: exportJSON
     displayName: Export JSON
     type: boolean
     default: true
-
   - name: Dashboard_ID
     displayName: Enter Dashboard ID (only used if Export JSON is selected)
     type: string
     default: ''
-
-variables:
-  - template: variables.yml
-stages:
-  - stage: Export_JSON
-    displayName: Export JSON
-    condition: eq('${{ parameters.exportJSON }}', 'true')
-    variables:
-      - group: Shared-Variables
-    jobs:
-      - job: Export
-        steps:
-          - checkout: self
-            persistCredentials: true
-          - template: ./template-branching-strategy/export.yml
-            parameters:
-              Dashboard_ID: ${{ parameters.Dashboard_ID }}
-              Location: ${{ parameters.Location }}
-              DashboardType: ${{ parameters.DashboardType }}
-              runCheckout: false
-
-  - stage: Convert_JSON
-    displayName: Convert JSON
-    variables:
-      - group: Shared-Variables
-    jobs:
-      - job: Convert
-        steps:
-          - checkout: self
-            persistCredentials: true
-          - template: ./template-branching-strategy/convert.yml
-            parameters:
-              Dashboard_ID: ${{ parameters.Dashboard_ID }}
-              Location: ${{ parameters.Location }}
-              ExportJSON: ${{ parameters.exportJSON }}
-              DashboardType: ${{ parameters.DashboardType }}
-              runCheckout: false
-
-  - stage: Plan_${{ parameters.Location }}
-    displayName: Plan ${{ parameters.Location }}
-    jobs:
-      - deployment: Terraform_Plan
-        environment: "Staging_Plan"
-        pool:
-          vmImage: "$(vmImage)"
-        variables:
-          - template: ./template/variables.vod.yml
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - template: ./template/plan-branching-strategy.yml
-                  parameters:
-                    Location: ${{ parameters.Location }}
-                    runCheckout: false
-
-  - stage: README_Generation
-    displayName: Generating README File
-    dependsOn: Plan_${{ parameters.Location }}
-    variables:
-      - group: Shared-Variables
-    jobs:
-      - job: Readme
-        steps:
-          - checkout: self
-            persistCredentials: true
-          - template: ./template-branching-strategy/tfdocs.yml
-  - stage: PR_To_Staging
-    displayName: PR To Staging
-    dependsOn: README_Generation
-    jobs:
-      - deployment: PR_Deployment
-        environment: "Staging_Plan"
-        pool:
-          vmImage: "$(vmImage)"
-        variables:
-          - template: ./template/variables.vod.yml
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - template: ./template-branching-strategy/pullrequest.yml
-                  parameters:
-                    SourceBranch: $(Build.SourceBranch)
-                    TargetBranch: "staging"
