@@ -4,7 +4,7 @@
 
 #####TEST_MOD_README
 #####NEW_BRANCH
-#######Vishal
+
 Sample ASP.NET Core reference application, powered by Microsoft, demonstrating a single-process (monolithic) application architecture and deployment model. If you're new to .NET development, read the [Getting Started for Beginners](https://github.com/dotnet-architecture/eShopOnWeb/wiki/Getting-Started-for-Beginners) guide.
 
 A list of Frequently Asked Questions about this repository can be found [here](https://github.com/dotnet-architecture/eShopOnWeb/wiki/Frequently-Asked-Questions).
@@ -91,6 +91,27 @@ According to the prompt, enter an `env name`, and select `subscription` and `loc
 2. The resource group name created in azure portal will be **rg-{env name}**.
 
 You can also run the sample directly locally (See below).
+
+## Deployment Options
+
+This repository supports multiple deployment options:
+
+### 1. Azure Developer CLI (azd) - Recommended
+Uses the built-in `azure.yaml` template for quick Azure deployment. See above section.
+
+### 2. Azure Bicep Templates
+Traditional Azure deployment using Bicep templates in the `infra/` directory.
+
+### 3. Kubernetes Deployment
+Deploy to any Kubernetes cluster using the manifests in the `k8s/` directory.
+See [k8s/README.md](k8s/README.md) for detailed instructions.
+
+### 4. Terraform Infrastructure
+Deploy Azure infrastructure using Terraform configuration in the `terraform/` directory.
+See [terraform/README.md](terraform/README.md) for detailed instructions.
+
+### 5. Docker Compose
+Run locally using Docker Compose. See "Running the sample using Docker" section below.
 
 ## Running the sample locally
 Most of the site's functionality works with just the web application running. However, the site's Admin page relies on Blazor WebAssembly running in the browser, and it must communicate with the server using the site's PublicApi web application. You'll need to also run this project. You can configure Visual Studio to start multiple projects, or just go to the PublicApi folder in a terminal window and run `dotnet run` from there. After that from the Web folder you should run `dotnet run --launch-profile Web`. Now you should be able to browse to `https://localhost:5001/`. The admin part in Blazor is accessible to `https://localhost:5001/admin`  
