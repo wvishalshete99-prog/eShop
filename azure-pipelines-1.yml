@@ -1,6 +1,5 @@
 trigger: none
 pr: none
-
 parameters:
   - name: Location
     displayName: Select the location for Enabler Components Deployment
@@ -31,7 +30,6 @@ parameters:
 
 variables:
   - template: variables.yml
-
 stages:
   - stage: Export_JSON
     displayName: Export JSON
@@ -49,6 +47,7 @@ stages:
               Location: ${{ parameters.Location }}
               DashboardType: ${{ parameters.DashboardType }}
               runCheckout: false
+
   - stage: Convert_JSON
     displayName: Convert JSON
     variables:
@@ -95,7 +94,6 @@ stages:
           - checkout: self
             persistCredentials: true
           - template: ./template-branching-strategy/tfdocs.yml
-
   - stage: PR_To_Staging
     displayName: PR To Staging
     dependsOn: README_Generation
