@@ -10,6 +10,7 @@ parameters:
       - UKS_Shared
       - UKW_Shared
       - IN_Shared
+
   - name: DashboardType
     displayName: Select Dashboard Type
     type: string
@@ -18,14 +19,13 @@ parameters:
       - Standard Dashboard
       - Monitoring Dashboard
       - Capacity Dashboard
-
   - name: exportJSON
     displayName: Export JSON
     type: boolean
     default: true
 
   - name: Dashboard_ID
-    displayName: Enter Dashboard ID
+    displayName: Enter Dashboard ID (only used if Export JSON is selected)
     type: string
     default: ''
 
