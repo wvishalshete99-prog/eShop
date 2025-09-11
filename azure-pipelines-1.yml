@@ -8,10 +8,22 @@ parameters:
     default: "UKS_Shared"
     values:
       - UKS_Shared
+      - UKW_Shared
+      - IN_Shared
+  - name: DashboardType
+    displayName: Select Dashboard Type
+    type: string
+    default: "Standard Dashboard"
+    values:
+      - Standard Dashboard
+      - Monitoring Dashboard
+      - Capacity Dashboard
+
   - name: exportJSON
     displayName: Export JSON
     type: boolean
     default: true
+
   - name: Dashboard_ID
     displayName: Enter Dashboard ID
     type: string
@@ -23,20 +35,20 @@ variables:
 stages:
   - stage: Export_JSON
     displayName: Export JSON
+    condition: eq('${{ parameters.exportJSON }}', 'true')
     variables:
       - group: Shared-Variables
     jobs:
       - job: Export
-        condition: eq( '${{ parameters.exportJSON }}', 'true')
         steps:
           - checkout: self
             persistCredentials: true
           - template: ./template-branching-strategy/export.yml
             parameters:
-              Dashboard_ID : ${{parameters.Dashboard_ID}}
-              Location: ${{parameters.Location}}
+              Dashboard_ID: ${{ parameters.Dashboard_ID }}
+              Location: ${{ parameters.Location }}
+              DashboardType: ${{ parameters.DashboardType }}
               runCheckout: false
-        
   - stage: Convert_JSON
     displayName: Convert JSON
     variables:
@@ -48,16 +60,17 @@ stages:
             persistCredentials: true
           - template: ./template-branching-strategy/convert.yml
             parameters:
-              Dashboard_ID : ${{parameters.Dashboard_ID}}
-              Location: ${{parameters.Location}}
-              ExportJSON: ${{parameters.exportJSON}}
+              Dashboard_ID: ${{ parameters.Dashboard_ID }}
+              Location: ${{ parameters.Location }}
+              ExportJSON: ${{ parameters.exportJSON }}
+              DashboardType: ${{ parameters.DashboardType }}
               runCheckout: false
 
-  - stage: Plan_${{parameters.Location}}
+  - stage: Plan_${{ parameters.Location }}
+    displayName: Plan ${{ parameters.Location }}
     jobs:
       - deployment: Terraform_Plan
         environment: "Staging_Plan"
-        displayName: Plan ${{parameters.Location}}
         pool:
           vmImage: "$(vmImage)"
         variables:
@@ -68,11 +81,12 @@ stages:
               steps:
                 - template: ./template/plan-branching-strategy.yml
                   parameters:
-                    Location: ${{parameters.Location}}
+                    Location: ${{ parameters.Location }}
                     runCheckout: false
 
   - stage: README_Generation
     displayName: Generating README File
+    dependsOn: Plan_${{ parameters.Location }}
     variables:
       - group: Shared-Variables
     jobs:
@@ -81,13 +95,13 @@ stages:
           - checkout: self
             persistCredentials: true
           - template: ./template-branching-strategy/tfdocs.yml
-    dependsOn: Plan_${{parameters.Location}}
 
   - stage: PR_To_Staging
+    displayName: PR To Staging
+    dependsOn: README_Generation
     jobs:
-      - deployment:
+      - deployment: PR_Deployment
         environment: "Staging_Plan"
-        displayName: PR To Staging
         pool:
           vmImage: "$(vmImage)"
         variables:
@@ -100,4 +114,3 @@ stages:
                   parameters:
                     SourceBranch: $(Build.SourceBranch)
                     TargetBranch: "staging"
-  # dependsOn: README_Generation
