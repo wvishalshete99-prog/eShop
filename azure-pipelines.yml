@@ -25,10 +25,10 @@ parameters:
     default: "Test1"
     values:
       - Test1
-      - Test2
-      - Test3
-      - Test4
-      - Test5
+      - .
+      - .
+      - .
+      - .
 
   - name: DashboardReference
     displayName: Enter Dashboard Resource ID (only used if 'Use Dashboard Resource ID' is selected)
