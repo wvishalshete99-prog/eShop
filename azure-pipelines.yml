@@ -31,14 +31,10 @@ parameters:
       - Test5
 
   - name: DashboardReference
-    displayName: Enter Dashboard JSON file path or URL (only used if 'Provide JSON or URL' is selected)
+    displayName: Enter Dashboard Resource ID (only used if 'Use Dashboard Resource ID' is selected)
     type: string
     default: ''
 
-  - name: ValidateJSON
-    displayName: Validate JSON before deployment (only used if 'Provide JSON or URL' is selected)
-    type: boolean
-    default: true
 variables:
   - template: variables.yml
 stages:
