@@ -33,7 +33,7 @@ parameters:
   - name: DashboardReference
     displayName: Enter Dashboard Resource ID (only used if 'Use Dashboard Resource ID' is selected)
     type: string
-    default: 'To be filled'
+    default: ''
 
 variables:
   - template: variables.yml
