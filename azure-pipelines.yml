@@ -17,7 +17,7 @@ parameters:
     default: "Use Existing Template"
     values:
       - Use Existing Template
-      - Provide JSON or URL
+      - Use Existing Dashboard Resource ID
 
   - name: TemplateName
     displayName: Select Template (only used if 'Use Existing Template' is selected)
