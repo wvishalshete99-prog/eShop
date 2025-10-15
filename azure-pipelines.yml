@@ -16,7 +16,7 @@ parameters:
     type: string
     default: "Use Existing Template"
     values:
-      - Use Existing Template
+      - Use Existing Dashboard Template
       - Use Existing Dashboard Resource ID
 
   - name: TemplateName
