@@ -24,4 +24,46 @@ parameters:
     type: string
     default: "Test1"
     values:
-     
+      - Test1
+      - Test3
+
+  - name: DashboardReference
+    displayName: Enter Dashboard JSON file path or URL (only used if 'Provide JSON or URL' is selected)
+    type: string
+    default: ''
+
+  - name: ValidateJSON
+    displayName: Validate JSON before deployment (only used if 'Provide JSON or URL' is selected)
+    type: boolean
+    default: true
+
+variables:
+  - template: variables.yml
+
+stages:
+  - stage: Deploy_Custom_Dashboard
+    displayName: Deploy Custom Dashboard
+    condition: eq('${{ parameters.DeploymentMode }}', 'Provide JSON or URL')
+    jobs:
+      - job: DeployCustom
+        steps:
+          - checkout: self
+            persistCredentials: true
+          - template: ./template-branching-strategy/deploy-custom.yml
+            parameters:
+              DashboardReference: ${{ parameters.DashboardReference }}
+              Location: ${{ parameters.Location }}
+              ValidateJSON: ${{ parameters.ValidateJSON }}
+
+  - stage: Deploy_Template_Dashboard
+    displayName: Deploy Template Dashboard
+    condition: eq('${{ parameters.DeploymentMode }}', 'Use Existing Template')
+    jobs:
+      - job: DeployTemplate
+        steps:
+          - checkout: self
+            persistCredentials: true
+          - template: ./template-branching-strategy/deploy-template.yml
+            parameters:
+              Location: ${{ parameters.Location }}
+              TemplateName: ${{ parameters.TemplateName }}
