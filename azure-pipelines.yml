@@ -25,7 +25,10 @@ parameters:
     default: "Test1"
     values:
       - Test1
+      - Test2
       - Test3
+      - Test4
+      - Test5
 
   - name: DashboardReference
     displayName: Enter Dashboard JSON file path or URL (only used if 'Provide JSON or URL' is selected)
@@ -36,10 +39,8 @@ parameters:
     displayName: Validate JSON before deployment (only used if 'Provide JSON or URL' is selected)
     type: boolean
     default: true
-
 variables:
   - template: variables.yml
-
 stages:
   - stage: Deploy_Custom_Dashboard
     displayName: Deploy Custom Dashboard
