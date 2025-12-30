@@ -1,35 +1,45 @@
 
-# azure-pipelines-enable-maintenance.yml
-# Maintenance – Enable (asks for Resource Names + CRQ/SR/INC). Includes a "Next" confirmation screen.
+# azure-pipelines.yml
+# Runtime-parameterized pipeline for Maintenance Enable/Disable with confirmation
 
-trigger: none
+trigger: none  # run manually
+
 pr: none
 
 # -------------------------
-# Parameters (descriptive labels)
+# Parameters shown on screen
 # -------------------------
 parameters:
+  - name: maintenanceAction
+    displayName: Action for maintenance
+    type: string
+    default: Enable
+    values:
+      - Enable
+      - Disable
+
   - name: resourceNames
-    # Descriptive label: tells users what to enter + format
-    displayName: "Azure resource name(s) — enter exact names, comma-separated (no spaces). Example: er-gw-01,vpn-gw-02,vm-nw-03"
+    displayName: Azure resource name(s) (comma-separated)
     type: string
     default: ''
+
   - name: referenceId
-    # Descriptive label: explains CRQ/SR/INC with examples
-    displayName: "Reference ID — approved Change/Service/Incident (must start with CRQ/SR/INC). Examples: CRQ00012345 or SR00056789 or INC00098765"
+    displayName: Reference Change Request [CRQ], Service Request [SR], or Incident [INC] ID
     type: string
     default: ''
 
 # -------------------------
-# Variables (set your service connection)
+# Variables you should set
 # -------------------------
 variables:
-  azureServiceConnection: 'REPLACE_WITH_AZURE_SERVICE_CONNECTION'  # e.g., Vodafone-Networks-Staging-SC
+  # Name of an existing Azure Resource Manager service connection in ADO
+  azureServiceConnection: 'azureSubscriptionServiceConnection'
+  # Optional: tag key names (kept as variables for easy governance changes)
   tagMaintenanceKey: 'MaintenanceMode'
   tagChangeRefKey: 'ChangeRef'
 
 stages:
-  # 1) Validate the inputs
+  # 1) Validate the inputs (format & presence)
   - stage: ValidateInputs
     displayName: Validate Inputs
     jobs:
@@ -39,60 +49,57 @@ stages:
           vmImage: 'ubuntu-latest'
         steps:
           - script: |
-              echo "Validating inputs for ENABLE maintenance..."
-              echo "Tip: You can copy the exact resource name from the Azure Portal > Resource > Overview."
+              echo "Validating inputs..."
+              echo "Action: $(maintenanceAction)"
+              echo "Resource Names: $(resourceNames)"
+              echo "Reference ID: $(referenceId)"
 
+              # Ensure resourceNames is provided
               if [ -z "$(resourceNames)" ]; then
-                echo "ERROR: Please provide at least one Azure resource name."
-                echo "Example input: er-gw-01,vpn-gw-02,vm-nw-03"
+                echo "ERROR: Please provide at least one Azure resource name (comma-separated if multiple)."
                 exit 1
               fi
 
-              # Trim spaces and ensure not empty
+              # Normalize whitespace
               RESOURCES=$(echo "$(resourceNames)" | sed 's/ //g')
               if [ -z "$RESOURCES" ]; then
-                echo "ERROR: Resource names cannot be empty after trimming spaces."
-                echo "Example input: er-gw-01,vpn-gw-02,vm-nw-03"
+                echo "ERROR: Resource names cannot be empty after trimming."
                 exit 1
               fi
 
+              # Validate referenceId starts with CRQ/SR/INC (case-insensitive)
               REF="$(referenceId)"
               if ! echo "$REF" | grep -Eiq '^(CRQ|SR|INC)'; then
                 echo "ERROR: Reference ID must start with CRQ / SR / INC (e.g., CRQ00012345)."
                 exit 1
               fi
 
-              echo "✅ All validations passed."
+              # Validate action is either Enable or Disable
+              ACT="$(maintenanceAction)"
+              if [ "$ACT" != "Enable" ] && [ "$ACT" != "Disable" ]; then
+                echo "ERROR: Action must be 'Enable' or 'Disable'."
+                exit 1
+              fi
+
+              echo "All validations passed."
             displayName: Validate parameter formats
 
-          # "Next" button behavior — manual confirmation with friendly guidance
+          # "Next" button behavior — manual confirmation before making changes
           - task: ManualValidation@0
-            displayName: "Next: Review details and proceed to ENABLE maintenance"
+            displayName: "Next: Proceed to run the pipeline"
             inputs:
+              notifyUsers: ''
               instructions: |
-                Please review the details below. Click **Resume** to proceed or **Reject** to cancel.
-
-                **Action:** ENABLE maintenance  
-                **Azure resource name(s):** $(resourceNames)  
-                **Reference ID (CRQ/SR/INC):** $(referenceId)
-
-                ---
-                **How to enter resource names**
-                • Enter the **exact names** as seen in Azure Portal (Resource > Overview)  
-                • Separate multiple names with commas (no spaces).  
-                • Example: `er-gw-01,vpn-gw-02,vm-nw-03`
-
-                **What happens next**
-                • Each listed resource will be tagged with `MaintenanceMode=ON` and `ChangeRef=$(referenceId)`  
-                • A summary of updated resources will be printed.  
-                • If any names do not match an existing resource, they will be listed as “Not found”.
-
+                Review the parameters and click 'Resume' to proceed:
+                - Action: $(maintenanceAction)
+                - Resource Names: $(resourceNames)
+                - Reference ID: $(referenceId)
               onTimeout: 'reject'
-              timeout: '0'  # no timeout
+              timeout: '0'  # no timeout by default
 
-  # 2) Apply maintenance tags
+  # 2) Apply or remove maintenance tags
   - stage: ApplyMaintenance
-    displayName: Enable maintenance (tag resources)
+    displayName: Apply/Remove Maintenance Tags
     dependsOn: ValidateInputs
     condition: succeeded()
     jobs:
@@ -102,16 +109,15 @@ stages:
           vmImage: 'ubuntu-latest'
         steps:
           - task: AzureCLI@2
-            displayName: Azure login
+            displayName: "Login to Azure"
             inputs:
               azureSubscription: $(azureServiceConnection)
               scriptType: bash
               scriptLocation: inlineScript
               inlineScript: |
                 echo "Azure login successful."
-
           - task: AzureCLI@2
-            displayName: Locate resources and set MaintenanceMode=ON + ChangeRef
+            displayName: "Locate resources and set maintenance tags"
             inputs:
               azureSubscription: $(azureServiceConnection)
               scriptType: bash
@@ -119,25 +125,35 @@ stages:
               inlineScript: |
                 set -euo pipefail
 
+                # Inputs
+                ACTION="$(maintenanceAction)"
+                REF="$(referenceId)"
                 TAG_MAINT_KEY="$(tagMaintenanceKey)"
                 TAG_REF_KEY="$(tagChangeRefKey)"
-                REF="$(referenceId)"
 
-                # Split the comma-separated names into an array, removing whitespace
+                # Desired tag values based on action
+                if [ "$ACTION" = "Enable" ]; then
+                  MAINT_VAL="ON"
+                else
+                  MAINT_VAL="OFF"
+                fi
+
+                # Split the comma-separated names into an array
                 IFS=',' read -ra NAMES <<< "$(echo "$(resourceNames)" | tr -d '[:space:]')"
 
-                echo "Searching for resources by exact name across the subscription..."
+                echo "Looking up resources by name across the subscription..."
                 FOUND_IDS=()
                 NOT_FOUND=()
 
                 for NAME in "${NAMES[@]}"; do
+                  # Query ARM for resources by name (exact matches)
                   IDS=$(az resource list --name "$NAME" --query "[].id" -o tsv || true)
+
                   if [ -z "$IDS" ]; then
-                    echo "⚠️  Not found: $NAME"
+                    echo "WARN: Resource '$NAME' not found."
                     NOT_FOUND+=("$NAME")
                   else
                     while IFS= read -r ID; do
-                      [ -z "$ID" ] && continue
                       FOUND_IDS+=("$ID")
                       echo "Found: $ID"
                     done <<< "$IDS"
@@ -145,23 +161,34 @@ stages:
                 done
 
                 if [ ${#FOUND_IDS[@]} -eq 0 ]; then
-                  echo "❌ No matching resources were found for the names you entered."
-                  echo "Tip: Verify the exact names in Azure Portal (Resource > Overview) and try again."
+                  echo "ERROR: No matching resources found for provided names. Aborting."
                   exit 1
                 fi
 
-                echo "Applying tags: ${TAG_MAINT_KEY}=ON and ${TAG_REF_KEY}=${REF}"
+                if [ ${#NOT_FOUND[@]} -gt 0 ]; then
+                  echo "WARNING: The following resource names were not found: ${NOT_FOUND[*]}"
+                fi
+
+                echo "Applying tags for $ACTION maintenance..."
                 for ID in "${FOUND_IDS[@]}"; do
-                  az resource update --ids "$ID" --set "tags.${TAG_MAINT_KEY}=ON" "tags.${TAG_REF_KEY}=${REF}"
-                  echo "✅ Tagged: $ID  (${TAG_MAINT_KEY}=ON, ${TAG_REF_KEY}=${REF})"
+                  if [ "$ACTION" = "Enable" ]; then
+                    # Set tags: MaintenanceMode=ON, ChangeRef=<REF>
+                    az resource update --ids "$ID" --set "tags.${TAG_MAINT_KEY}=${MAINT_VAL}" "tags.${TAG_REF_KEY}=${REF}"
+                  else
+                    # Set MaintenanceMode=OFF; keep ChangeRef for audit (optional). If you prefer to remove, use: --remove tags.ChangeRef
+                    az resource update --ids "$ID" --set "tags.${TAG_MAINT_KEY}=${MAINT_VAL}" "tags.${TAG_REF_KEY}=${REF}"
+                  fi
+                  echo "Updated tags on: $ID"
                 done
 
-                echo "---- Summary ----"
-                echo "Action       : ENABLE"
-                echo "Reference ID : $REF"
-                echo "Updated      : ${#FOUND_IDS[@]} resource(s)"
+                echo "Summary:"
+                echo "  Action        : $ACTION"
+                echo "  Reference ID  : $REF"
+                echo "  Maint Tag     : ${TAG_MAINT_KEY}=${MAINT_VAL}"
+                echo "  ChangeRef Tag : ${TAG_REF_KEY}=${REF}"
+                echo "  Updated count : ${#FOUND_IDS[@]}"
                 if [ ${#NOT_FOUND[@]} -gt 0 ]; then
-                  echo "Not found    : ${NOT_FOUND[*]}"
+                  echo "  Not found     : ${NOT_FOUND[*]}"
                 fi
 
                 echo "Done."
