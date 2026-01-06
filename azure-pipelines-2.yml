@@ -1,15 +1,20 @@
 
 # azure-pipelines.yml
 # Runtime-parameterized pipeline for Maintenance Enable/Disable
-# Adds "Exclude resource names" (Disable-only) with validation and conditional confirmation.
+# Reference ID shown first; includes "Exclude resource names" (Disable-only), validation, and conditional confirmation.
 
 trigger: none
 pr: none
 
 # -------------------------
-# Parameters shown on screen
+# Parameters shown on screen (Reference ID first)
 # -------------------------
 parameters:
+  - name: referenceId
+    displayName: "Reference ID — approved Change/Service/Incident (must start with CRQ/SR/INC). Examples: CRQ00012345, SR00056789, INC00098765"
+    type: string
+    default: ''
+
   - name: maintenanceAction
     displayName: "Action for maintenance (choose one): Enable or Disable"
     type: string
@@ -28,12 +33,34 @@ parameters:
     type: string
     default: ''
 
-  - name: referenceId
-    displayName: "Reference ID — approved Change/Service/Incident (must start with CRQ/SR/INC). Examples: CRQ00012345, SR00056789, INC00098765"
-    type: string
-    default: ''
-
 # -------------------------
 # Variables (update as needed)
 # -------------------------
 variables:
+  azureServiceConnection: 'azureSubscriptionServiceConnection'  # ADO ARM service connection
+  tagMaintenanceKey: 'MaintenanceMode'
+  tagChangeRefKey: 'ChangeRef'
+
+# -------------------------
+# Stages
+# -------------------------
+stages:
+  - stage: ValidateInputs
+    displayName: "Validate inputs"
+    jobs:
+      - job: Validate
+        displayName: "Validate runtime parameters"
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - checkout: none
+
+          - script: |
+              set -e
+
+              REF_ID='${{ parameters.referenceId }}'
+              ACTION='${{ parameters.maintenanceAction }}'
+              INCLUDE_RAW='${{ parameters.resourceNames }}'
+              EXCLUDE_RAW='${{ parameters.excludeResourceNames }}'
+
+              echo "Reference ID............: ${REF_ID}"
