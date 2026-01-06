@@ -1,8 +1,9 @@
 
 # azure-pipelines.yml
-# Runtime-parameterized pipeline for Maintenance Enable/Disable with action-aware validation & execution
+# Runtime-parameterized pipeline for Maintenance Enable/Disable
+# Adds "Exclude resource names" support (Disable-only) with validation and conditional confirmation.
 
-trigger: none  # run manually
+trigger: none
 pr: none
 
 # -------------------------
@@ -22,6 +23,11 @@ parameters:
     type: string
     default: ''
 
+  - name: excludeResourceNames
+    displayName: "Exclude resource name(s) — applies only when Action=Disable; comma-separated (no spaces). Example: er-gw-04,vm-nw-05"
+    type: string
+    default: ''
+
   - name: referenceId
     displayName: "Reference ID — approved Change/Service/Incident (must start with CRQ/SR/INC). Examples: CRQ00012345, SR00056789, INC00098765"
     type: string
@@ -31,10 +37,171 @@ parameters:
 # Variables you should set
 # -------------------------
 variables:
-  # Name of an existing Azure Resource Manager service connection in ADO
-  azureServiceConnection: 'azureSubscriptionServiceConnection'
-  # Optional: tag key names (kept as variables for easy governance changes)
+  azureServiceConnection: 'azureSubscriptionServiceConnection'  # ADO ARM service connection
   tagMaintenanceKey: 'MaintenanceMode'
   tagChangeRefKey: 'ChangeRef'
 
+# -------------------------
+# Stages
+# -------------------------
 stages:
+  - stage: ValidateInputs
+    displayName: "Validate inputs"
+    jobs:
+      - job: Validate
+        displayName: "Validate runtime parameters"
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - checkout: none
+
+          - script: |
+              set -e
+
+              ACTION="$(echo '$(maintenanceAction)')"
+              INCLUDE_RAW="$(echo '$(resourceNames)')"
+              EXCLUDE_RAW="$(echo '$(excludeResourceNames)')"
+              REF_ID="$(echo '$(referenceId)')"
+
+              echo "Action..................: ${ACTION}"
+              echo "Include resources (raw)..: ${INCLUDE_RAW}"
+              echo "Exclude resources (raw)..: ${EXCLUDE_RAW}"
+              echo "Reference ID............: ${REF_ID}"
+              echo
+
+              # --- Basic reference validation ---
+              if [ -z "${REF_ID}" ]; then
+                echo "ERROR: Reference ID is required."
+                exit 1
+              fi
+              case "${REF_ID}" in
+                CRQ*|SR*|INC*)
+                  ;;
+                *)
+                  echo "ERROR: Reference ID must start with CRQ / SR / INC."
+                  exit 1
+                  ;;
+              esac
+
+              # Normalize comma lists by removing spaces (users may accidentally add spaces)
+              INCLUDE="${INCLUDE_RAW// /}"
+              EXCLUDE="${EXCLUDE_RAW// /}"
+
+              # Helper: check duplicates across include & exclude
+              dup_check() {
+                IFS=',' read -r -a incArr <<< "${INCLUDE}"
+                IFS=',' read -r -a excArr <<< "${EXCLUDE}"
+                for i in "${incArr[@]}"; do
+                  for e in "${excArr[@]}"; do
+                    if [ -n "$i" ] && [ "$i" = "$e" ]; then
+                      echo "ERROR: Resource '$i' appears in BOTH include and exclude."
+                      exit 1
+                    fi
+                  done
+                done
+              }
+
+              case "${ACTION}" in
+                Enable)
+                  # Enable: include list is REQUIRED; exclude must be empty/ignored
+                  if [ -z "${INCLUDE}" ]; then
+                    echo "ERROR: When Action=Enable, 'Azure resource name(s)' is required."
+                    exit 1
+                  fi
+                  if [ -n "${EXCLUDE}" ]; then
+                    echo "ERROR: 'Exclude resource name(s)' applies only when Action=Disable."
+                    exit 1
+                  fi
+                  ;;
+
+                Disable)
+                  # Disable: allow three modes
+                  # 1) Include only -> disable for listed resources
+                  # 2) Exclude only -> disable for ALL EXCEPT listed resources
+                  # 3) Both include & exclude -> disable for include MINUS exclude (rare but allowed)
+                  dup_check
+                  ;;
+
+                *)
+                  echo "ERROR: Unknown Action '${ACTION}'."
+                  exit 1
+                  ;;
+              esac
+
+              # Export normalized values to pipeline variables for later stages
+              echo "##vso[task.setvariable variable=IncludeList;isOutput=true]${INCLUDE}"
+              echo "##vso[task.setvariable variable=ExcludeList;isOutput=true]${EXCLUDE}"
+            displayName: "Validate & normalize inputs"
+            name: ValidateStep
+
+  # --- Conditional approval only for risky 'Disable ALL except' case ---
+  - stage: ConfirmDisableAllExcept
+    displayName: "Confirm Disable Maintenance – All Except"
+    dependsOn: ValidateInputs
+    condition: and(
+      eq('${{ parameters.maintenanceAction }}','Disable'),
+      or(
+        eq(dependencies.ValidateInputs.outputs['Validate.ValidateStep.IncludeList'],''),
+        eq(dependencies.ValidateInputs.outputs['Validate.ValidateStep.IncludeList'], '')
+      ),
+      ne(dependencies.ValidateInputs.outputs['Validate.ValidateStep.ExcludeList'],'')
+    )
+    jobs:
+      - job: ManualApprove
+        displayName: "Manual approval – confirm scope"
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - task: ManualValidation@0
+            displayName: "Please confirm Disable Maintenance (ALL except listed resources)"
+            inputs:
+              notifyUsers: ''   # optionally add AAD emails for approvers
+              instructions: |
+                You are about to perform: **Disable Maintenance**
+                Scope: **ALL resources**
+                Excluded resources: $(ExcludeList)
+                Reference ID: ${{ parameters.referenceId }}
+
+                ⚠️ This action will disable maintenance for all resources **except** the names listed above.
+                Proceed only if the scope and exclusions are correct.
+              onTimeout: 'reject'
+              timeout: '1d'     # adjust as needed
+
+  - stage: Execute
+    displayName: "Execute maintenance action"
+    dependsOn:
+      - ValidateInputs
+      - ConfirmDisableAllExcept
+    condition: and(succeeded(), ne('${{ parameters.maintenanceAction }}',''))
+    jobs:
+      - job: PlanScope
+        displayName: "Resolve execution scope"
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - script: |
+              set -e
+
+              ACTION="${{ parameters.maintenanceAction }}"
+              INCLUDE="$(echo '$(IncludeList)')"
+              EXCLUDE="$(echo '$(ExcludeList)')"
+
+              echo "Action: ${ACTION}"
+              echo "Include: ${INCLUDE}"
+              echo "Exclude: ${EXCLUDE}"
+              echo
+
+              # Build execution plan into files for next steps
+              mkdir -p out
+
+              if [ "${ACTION}" = "Enable" ]; then
+                # Enable: operate only on INCLUDE list
+                echo "${INCLUDE}" | tr ',' '\n' | sed '/^$/d' > out/target_resources.txt
+                echo "Plan: ENABLE maintenance for listed resources:"
+                cat out/target_resources.txt
+
+              else
+                # Disable logic:
+                # Case A: Include only -> target = include
+                # Case B: Exclude only -> target = all minus exclude (you must define 'all' listing)
+                # Case C: Both -> target = include minus exclude
