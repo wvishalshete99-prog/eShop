@@ -1,20 +1,16 @@
 
 # azure-pipelines.yml
 # Runtime-parameterized pipeline for Maintenance Enable/Disable
-# Reference ID shown first; includes "Exclude resource names" (Disable-only), validation, and conditional confirmation.
+# Parameter order: Action (top), then Reference ID, then resource inputs.
+# Includes "Exclude resource names" (Disable-only), validation, and conditional confirmation.
 
 trigger: none
 pr: none
 
 # -------------------------
-# Parameters shown on screen (Reference ID first)
+# Parameters shown on screen
 # -------------------------
 parameters:
-  - name: referenceId
-    displayName: "Reference ID — approved Change/Service/Incident (must start with CRQ/SR/INC). Examples: CRQ00012345, SR00056789, INC00098765"
-    type: string
-    default: ''
-
   - name: maintenanceAction
     displayName: "Action for maintenance (choose one): Enable or Disable"
     type: string
@@ -22,6 +18,11 @@ parameters:
     values:
       - Enable
       - Disable
+
+  - name: referenceId
+    displayName: "Reference ID — approved Change/Service/Incident (must start with CRQ/SR/INC). Examples: CRQ00012345, SR00056789, INC00098765"
+    type: string
+    default: ''
 
   - name: resourceNames
     displayName: "Azure resource name(s) — enter exact names, comma-separated (no spaces). Example: er-gw-01,vpn-gw-02,vm-nw-03  (Required only when Action=Enable)"
@@ -58,9 +59,212 @@ stages:
           - script: |
               set -e
 
+              ACTION='${{ parameters.maintenanceAction }}'
               REF_ID='${{ parameters.referenceId }}'
+              INCLUDE_RAW='${{ parameters.resourceNames }}'
+              EXCLUDE_RAW='${{ parameters.excludeResourceNames }}'
+
+              echo "Action..................: ${ACTION}"
+              echo "Reference ID............: ${REF_ID}"
+              echo "Include resources (raw).: ${INCLUDE_RAW}"
+              echo "Exclude resources (raw).: ${EXCLUDE_RAW}"
+              echo
+
+              # --- Reference validation FIRST ---
+              if [ -z "${REF_ID}" ]; then
+                echo "ERROR: Reference ID is required."
+                exit 1
+              fi
+              case "${REF_ID}" in
+                CRQ*|SR*|INC*)
+                  ;;
+                *)
+                  echo "ERROR: Reference ID must start with CRQ / SR / INC."
+                  exit 1
+                  ;;
+              esac
+
+              # Normalize comma lists by removing spaces
+              INCLUDE="${INCLUDE_RAW// /}"
+              EXCLUDE="${EXCLUDE_RAW// /}"
+
+              # Duplicates across include & exclude are not allowed
+              IFS=',' read -r -a incArr <<< "${INCLUDE}"
+              IFS=',' read -r -a excArr <<< "${EXCLUDE}"
+              for i in "${incArr[@]}"; do
+                for e in "${excArr[@]}"; do
+                  if [ -n "$i" ] && [ "$i" = "$e" ]; then
+                    echo "ERROR: Resource '$i' appears in BOTH include and exclude."
+                    exit 1
+                  fi
+                done
+              done
+
+              case "${ACTION}" in
+                Enable)
+                  # Enable: include list is REQUIRED; exclude must be empty/ignored
+                  if [ -z "${INCLUDE}" ]; then
+                    echo "ERROR: When Action=Enable, 'Azure resource name(s)' is required."
+                    exit 1
+                  fi
+                  if [ -n "${EXCLUDE}" ]; then
+                    echo "ERROR: 'Exclude resource name(s)' applies only when Action=Disable."
+                    exit 1
+                  fi
+                  ;;
+
+                Disable)
+                  # Disable: allow include-only, exclude-only, or include-minus-exclude
+                  ;;
+                *)
+                  echo "ERROR: Unknown Action '${ACTION}'."
+                  exit 1
+                  ;;
+              esac
+
+              echo "Validation completed."
+            displayName: "Validate & normalize inputs"
+
+  # --- Conditional approval only for risky 'Disable ALL except' case ---
+  - stage: ConfirmDisableAllExcept
+    displayName: "Confirm Disable Maintenance – All Except"
+    dependsOn: ValidateInputs
+    condition: and(
+      eq('${{ parameters.maintenanceAction }}','Disable'),
+      eq('${{ parameters.resourceNames }}',''),
+      ne('${{ parameters.excludeResourceNames }}','')
+    )
+    jobs:
+      - job: ManualApprove
+        displayName: "Manual approval – confirm scope"
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - task: ManualValidation@0
+            displayName: "Confirm Disable Maintenance (ALL except exclusions)"
+            inputs:
+              notifyUsers: ''     # Optionally add approver emails
+              instructions: |
+                You are about to perform: **Disable Maintenance**
+                Scope: **ALL resources**
+                Excluded resources: ${{ parameters.excludeResourceNames }}
+                Reference ID: ${{ parameters.referenceId }}
+
+                ⚠️ This will disable maintenance for all resources **except** the names listed above.
+                Proceed only if the scope and exclusions are correct.
+              onTimeout: 'reject'
+              timeout: '1d'
+
+  - stage: Execute
+    displayName: "Execute maintenance action"
+    dependsOn:
+      - ValidateInputs
+      - ConfirmDisableAllExcept
+    condition: succeeded()
+    jobs:
+      - job: PlanScope
+        displayName: "Resolve execution scope"
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - script: |
+              set -e
+
               ACTION='${{ parameters.maintenanceAction }}'
               INCLUDE_RAW='${{ parameters.resourceNames }}'
               EXCLUDE_RAW='${{ parameters.excludeResourceNames }}'
 
-              echo "Reference ID............: ${REF_ID}"
+              # Re-normalize
+              INCLUDE="${INCLUDE_RAW// /}"
+              EXCLUDE="${EXCLUDE_RAW// /}"
+
+              echo "Action: ${ACTION}"
+              echo "Include: ${INCLUDE}"
+              echo "Exclude: ${EXCLUDE}"
+              echo
+
+              mkdir -p out
+
+              if [ "${ACTION}" = "Enable" ]; then
+                echo "${INCLUDE}" | tr ',' '\n' | sed '/^$/d' > out/target_resources.txt
+                echo "Plan: ENABLE maintenance for listed resources:"
+                cat out/target_resources.txt
+
+              else
+                echo "${INCLUDE}" | tr ',' '\n' | sed '/^$/d' > out/include.txt
+                echo "${EXCLUDE}" | tr ',' '\n' | sed '/^$/d' > out/exclude.txt
+
+                if [ -s out/include.txt ] && ! [ -s out/exclude.txt ]; then
+                  cp out/include.txt out/target_resources.txt
+                  echo "Plan: DISABLE maintenance for listed resources (include only)."
+
+                elif ! [ -s out/include.txt ] && [ -s out/exclude.txt ]; then
+                  # Disable ALL except exclusions -> enumerate all resources in scope and subtract exclusions.
+                  echo "NOTE: Implement discovery for ALL resources in scope and subtract exclusions."
+                  # Example skeleton (replace with your tenant/subscription/RG scope):
+                  # az account set --subscription "<your-subscription>"
+                  # az resource list --query "[].name" -o tsv > out/all.txt
+                  # grep -v -x -f out/exclude.txt out/all.txt > out/target_resources.txt
+
+                else
+                  # Both include and exclude present -> include minus exclude
+                  grep -v -x -f out/exclude.txt out/include.txt > out/target_resources.txt
+                  echo "Plan: DISABLE maintenance for include MINUS exclude."
+                fi
+
+                [ -f out/target_resources.txt ] && echo "Target resources:" && cat out/target_resources.txt || true
+              fi
+            displayName: "Build execution plan"
+
+      - job: ExecuteAction
+        displayName: "Apply maintenance action"
+        dependsOn: PlanScope
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - task: AzureCLI@2
+            displayName: "Login to Azure"
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -e
+                echo "Logged in via service connection."
+
+          - script: |
+              set -e
+              ACTION='${{ parameters.maintenanceAction }}'
+              REF_ID='${{ parameters.referenceId }}'
+              TAG_M_KEY='$(tagMaintenanceKey)'
+              TAG_C_KEY='$(tagChangeRefKey)'
+
+              if [ ! -f out/target_resources.txt ]; then
+                echo "No target resources resolved; nothing to do."
+                exit 0
+              fi
+
+              echo "Executing ${ACTION} for resources:"
+              cat out/target_resources.txt || true
+              echo
+
+              while read -r NAME; do
+                [ -z "${NAME}" ] && continue
+                echo "Processing: ${NAME}"
+
+                # TODO: Resolve resource IDs / group / type from NAME.
+                # RID="$(az resource list --query "[?name=='${NAME}'].id | [0]" -o tsv)"
+                # if [ -z "${RID}" ]; then
+                #   echo "WARN: Could not resolve resource id for ${NAME}, skipping."
+                #   continue
+                # fi
+
+                if [ "${ACTION}" = "Enable" ]; then
+                  echo "Enable maintenance for ${NAME}"
+                  # az resource update --ids "${RID}" --set tags.${TAG_M_KEY}=Enabled tags.${TAG_C_KEY}="${REF_ID}"
+                else
+                  echo "Disable maintenance for ${NAME}"
+                  # az resource update --ids "${RID}" --set tags.${TAG_M_KEY}=Disabled tags.${TAG_C_KEY}="${REF_ID}"
+                fi
+              done < out/target_resources.txt
+            displayName: "Apply tags / maintenance state (example)"
