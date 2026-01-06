@@ -1,15 +1,11 @@
 
 # azure-pipelines.yml
-# Runtime-parameterized pipeline for Maintenance Enable/Disable
 # Parameter order: Action (top), then Reference ID, then resource inputs.
-# Includes "Exclude resource names" (Disable-only), validation, and conditional confirmation.
+# Labels updated with attention markers; validation outputs show red text in logs.
 
 trigger: none
 pr: none
 
-# -------------------------
-# Parameters shown on screen
-# -------------------------
 parameters:
   - name: maintenanceAction
     displayName: "Action for maintenance (choose one): Enable or Disable"
@@ -25,26 +21,20 @@ parameters:
     default: ''
 
   - name: resourceNames
-    displayName: "Azure resource name(s) — enter exact names, comma-separated (no spaces). Example: er-gw-01,vpn-gw-02,vm-nw-03  (Required only when Action=Enable)"
+    displayName: "Azure resource name(s) — enter exact names, comma-separated (no spaces). Example: er-gw-01,vpn-gw-02,vm-nw-03  ⚠️ (Required only when Action=Enable)"
     type: string
     default: ''
 
   - name: excludeResourceNames
-    displayName: "Exclude resource name(s) — applies only when Action=Disable; comma-separated (no spaces). Example: er-gw-04,vm-nw-05"
+    displayName: "Exclude resource name(s) — comma-separated (no spaces). Example: er-gw-04,vm-nw-05  ⚠️ (Applies only when Action=Disable)"
     type: string
     default: ''
 
-# -------------------------
-# Variables (update as needed)
-# -------------------------
 variables:
-  azureServiceConnection: 'azureSubscriptionServiceConnection'  # ADO ARM service connection
+  azureServiceConnection: 'azureSubscriptionServiceConnection'
   tagMaintenanceKey: 'MaintenanceMode'
   tagChangeRefKey: 'ChangeRef'
 
-# -------------------------
-# Stages
-# -------------------------
 stages:
   - stage: ValidateInputs
     displayName: "Validate inputs"
@@ -59,27 +49,31 @@ stages:
           - script: |
               set -e
 
+              # ANSI colors for log output
+              RED='\033[0;31m'
+              YELLOW='\033[1;33m'
+              NC='\033[0m'  # No Color
+
               ACTION='${{ parameters.maintenanceAction }}'
               REF_ID='${{ parameters.referenceId }}'
               INCLUDE_RAW='${{ parameters.resourceNames }}'
               EXCLUDE_RAW='${{ parameters.excludeResourceNames }}'
 
-              echo "Action..................: ${ACTION}"
-              echo "Reference ID............: ${REF_ID}"
-              echo "Include resources (raw).: ${INCLUDE_RAW}"
-              echo "Exclude resources (raw).: ${EXCLUDE_RAW}"
-              echo
+              echo -e "Action..................: ${ACTION}"
+              echo -e "Reference ID............: ${REF_ID}"
+              echo -e "Include resources (raw).: ${INCLUDE_RAW}"
+              echo -e "Exclude resources (raw).: ${EXCLUDE_RAW}\n"
 
               # --- Reference validation FIRST ---
               if [ -z "${REF_ID}" ]; then
-                echo "ERROR: Reference ID is required."
+                echo -e "${RED}ERROR: Reference ID is required.${NC}"
                 exit 1
               fi
               case "${REF_ID}" in
                 CRQ*|SR*|INC*)
                   ;;
                 *)
-                  echo "ERROR: Reference ID must start with CRQ / SR / INC."
+                  echo -e "${RED}ERROR: Reference ID must start with CRQ / SR / INC.${NC}"
                   exit 1
                   ;;
               esac
@@ -94,7 +88,7 @@ stages:
               for i in "${incArr[@]}"; do
                 for e in "${excArr[@]}"; do
                   if [ -n "$i" ] && [ "$i" = "$e" ]; then
-                    echo "ERROR: Resource '$i' appears in BOTH include and exclude."
+                    echo -e "${RED}ERROR: Resource '$i' appears in BOTH include and exclude.${NC}"
                     exit 1
                   fi
                 done
@@ -102,22 +96,23 @@ stages:
 
               case "${ACTION}" in
                 Enable)
-                  # Enable: include list is REQUIRED; exclude must be empty/ignored
                   if [ -z "${INCLUDE}" ]; then
-                    echo "ERROR: When Action=Enable, 'Azure resource name(s)' is required."
+                    echo -e "${RED}ERROR: When Action=Enable, 'Azure resource name(s)' is required.${NC}"
                     exit 1
                   fi
                   if [ -n "${EXCLUDE}" ]; then
-                    echo "ERROR: 'Exclude resource name(s)' applies only when Action=Disable."
+                    echo -e "${RED}ERROR: 'Exclude resource name(s)' applies only when Action=Disable.${NC}"
                     exit 1
                   fi
                   ;;
 
                 Disable)
-                  # Disable: allow include-only, exclude-only, or include-minus-exclude
+                  if [ -z "${INCLUDE}" ] && [ -z "${EXCLUDE}" ]; then
+                    echo -e "${YELLOW}WARNING: Disable requested without include or exclude lists; this implies 'ALL resources'. Consider adding exclusions or confirm via approval stage.${NC}"
+                  fi
                   ;;
                 *)
-                  echo "ERROR: Unknown Action '${ACTION}'."
+                  echo -e "${RED}ERROR: Unknown Action '${ACTION}'.${NC}"
                   exit 1
                   ;;
               esac
@@ -125,7 +120,6 @@ stages:
               echo "Validation completed."
             displayName: "Validate & normalize inputs"
 
-  # --- Conditional approval only for risky 'Disable ALL except' case ---
   - stage: ConfirmDisableAllExcept
     displayName: "Confirm Disable Maintenance – All Except"
     dependsOn: ValidateInputs
@@ -144,7 +138,7 @@ stages:
           - task: ManualValidation@0
             displayName: "Confirm Disable Maintenance (ALL except exclusions)"
             inputs:
-              notifyUsers: ''     # Optionally add approver emails
+              notifyUsers: ''
               instructions: |
                 You are about to perform: **Disable Maintenance**
                 Scope: **ALL resources**
@@ -175,7 +169,6 @@ stages:
               INCLUDE_RAW='${{ parameters.resourceNames }}'
               EXCLUDE_RAW='${{ parameters.excludeResourceNames }}'
 
-              # Re-normalize
               INCLUDE="${INCLUDE_RAW// /}"
               EXCLUDE="${EXCLUDE_RAW// /}"
 
@@ -200,15 +193,12 @@ stages:
                   echo "Plan: DISABLE maintenance for listed resources (include only)."
 
                 elif ! [ -s out/include.txt ] && [ -s out/exclude.txt ]; then
-                  # Disable ALL except exclusions -> enumerate all resources in scope and subtract exclusions.
                   echo "NOTE: Implement discovery for ALL resources in scope and subtract exclusions."
-                  # Example skeleton (replace with your tenant/subscription/RG scope):
                   # az account set --subscription "<your-subscription>"
                   # az resource list --query "[].name" -o tsv > out/all.txt
                   # grep -v -x -f out/exclude.txt out/all.txt > out/target_resources.txt
 
                 else
-                  # Both include and exclude present -> include minus exclude
                   grep -v -x -f out/exclude.txt out/include.txt > out/target_resources.txt
                   echo "Plan: DISABLE maintenance for include MINUS exclude."
                 fi
@@ -252,20 +242,6 @@ stages:
               while read -r NAME; do
                 [ -z "${NAME}" ] && continue
                 echo "Processing: ${NAME}"
-
-                # TODO: Resolve resource IDs / group / type from NAME.
-                # RID="$(az resource list --query "[?name=='${NAME}'].id | [0]" -o tsv)"
-                # if [ -z "${RID}" ]; then
-                #   echo "WARN: Could not resolve resource id for ${NAME}, skipping."
-                #   continue
-                # fi
-
-                if [ "${ACTION}" = "Enable" ]; then
-                  echo "Enable maintenance for ${NAME}"
-                  # az resource update --ids "${RID}" --set tags.${TAG_M_KEY}=Enabled tags.${TAG_C_KEY}="${REF_ID}"
-                else
-                  echo "Disable maintenance for ${NAME}"
-                  # az resource update --ids "${RID}" --set tags.${TAG_M_KEY}=Disabled tags.${TAG_C_KEY}="${REF_ID}"
-                fi
+                # RID resolution & tag updates go here
               done < out/target_resources.txt
             displayName: "Apply tags / maintenance state (example)"
