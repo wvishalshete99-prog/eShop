@@ -129,11 +129,12 @@ stages:
   - stage: ConfirmDisableAllExcept
     displayName: "Confirm Disable Maintenance – All Except"
     dependsOn: ValidateInputs
-    condition: and(
-      eq('${{ parameters.maintenanceAction }}','Disable'),
-      eq('${{ parameters.resourceNames }}',''),
-      ne('${{ parameters.excludeResourceNames }}','')
-    )
+    condition: >
+      and(
+        eq('${{ parameters.maintenanceAction }}','Disable'),
+        eq('${{ parameters.resourceNames }}',''),
+        ne('${{ parameters.excludeResourceNames }}','')
+      )
     jobs:
       - job: ManualApprove
         displayName: "Manual approval – confirm scope"
