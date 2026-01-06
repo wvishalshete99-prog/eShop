@@ -18,10 +18,10 @@ parameters:
     displayName: "Azure resource name(s) — enter exact names, comma-separated (no spaces). Example: er-gw-01,vpn-gw-02,vm-nw-03  ⚠️ (Required only when Action=Enable)"
     type: string
     # Prefill with a visible hint (users must replace it)
-    default: 'ENTER-NAMES-WHEN-ACTION-IS-ENABLE'
+    default: 'This field is required only when action is ENABLE'
 
   - name: excludeResourceNames
     displayName: "Exclude resource name(s) — comma-separated (no spaces). Example: er-gw-04,vm-nw-05  ⚠️ (Applies only when Action=Disable)"
     type: string
     # Prefill with a visible hint (users must clear/replace it when not used)
-    default: 'ONLY-FOR-DISABLE-ENTER-EXCLUSIONS-OR-LEAVE-BLANK'
+    default: 'This field is required only when when action is DISABLE with exception'
